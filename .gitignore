@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# 데이터 · 모델 산출물 (재배포 불가 / 용량)
+chroma_db/
+*.sqlite3
+*.npy
+*.pkl
+data/
+.env
+.DS_Store
