@@ -5,7 +5,7 @@ BM25와 벡터 검색을 **RRF로 융합**하고, CrossEncoder로 재랭킹한 �
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-231%20passed-brightgreen)](tests/)
+[![tests](https://github.com/iaynu/korean-medical-rag/actions/workflows/tests.yml/badge.svg)](https://github.com/iaynu/korean-medical-rag/actions/workflows/tests.yml)
 
 ## 한눈에 보기
 
@@ -584,8 +584,8 @@ BM25는 질의 토큰이 문서에 하나라도 있어야 후보로 올립니다
 - [ ] 원본 코퍼스에서 세 가지 수정의 end-to-end 효과 측정 (데이터 접근과 GPU 필요)
 - [ ] `fusion_top_n`과 RRF 상수 `k` 튜닝
 - [ ] BM25 인덱스 영속화
-- [ ] `kiwipiepy` 경로를 CI에서 검증 (선택적 의존성을 포함한 별도 잡)
-- [ ] GitHub Actions로 테스트를 자동 실행하고 테스트 배지를 정적 이미지에서 실제 상태 배지로 교체
+- [x] `kiwipiepy` 경로를 CI에서 검증 (`test-morph` 잡)
+- [x] GitHub Actions로 테스트 자동 실행, 테스트 배지를 실제 상태 배지로 교체 (`.github/workflows/tests.yml`)
 
 ---
 
