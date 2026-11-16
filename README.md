@@ -7,6 +7,38 @@ BM25와 벡터 검색을 **RRF로 융합**하고, CrossEncoder로 재랭킹한 �
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-231%20passed-brightgreen)](tests/)
 
+## 한눈에 보기
+
+| | |
+|---|---|
+| **무엇을 하나** | 한국어 의료 질문에 대해 BM25와 벡터 검색 결과를 RRF로 합치고, CrossEncoder로 재랭킹한 뒤 LLM에 근거 문서와 함께 넘깁니다 |
+| **입력 / 출력** | 질문 + 문서 코퍼스(JSONL 또는 Chroma) → 근거 문서, 프롬프트, 답변, 단계별 중간 결과(`trace()`) |
+| **원본 대비 수정** | 한국어 BM25 토크나이저, 순위를 버리던 후보 병합, 문서 ID 충돌 (아래 "원본에서 고친 것") |
+| **코어 의존성** | `rank-bm25` 하나. 임베딩·재랭킹·생성 모델은 extras로 분리 |
+| **검증** | 테스트 231건, 소규모 합성 벤치마크 (원본 코퍼스 재측정은 없음) |
+| **GPU / 모델** | 검색·융합 단계 확인과 테스트에는 필요 없음 |
+
+## 빠른 시작
+
+모델도 GPU도 없이 검색·융합 단계를 바로 확인할 수 있습니다.
+
+```bash
+git clone https://github.com/iaynu/korean-medical-rag.git
+cd korean-medical-rag
+pip install -e ".[dev]"
+
+krag "당뇨병의 합병증은 무엇인가?" --corpus examples/sample_corpus.jsonl --explain   # 검색·융합 결과
+python examples/tokenizer_benchmark.py                                              # 토크나이저 비교
+pytest                                                                              # 테스트 231건
+```
+
+## 목차
+
+- [원본에서 고친 것](#원본에서-고친-것) · [측정](#측정)
+- [설치](#설치) · [사용법](#사용법) · [구조](#구조)
+- [테스트](#테스트) · [알려진 한계](#알려진-한계) · [확장하기](#확장하기) · [예외 레퍼런스](#예외-레퍼런스)
+- [자주 묻는 질문](#자주-묻는-질문) · [검증 환경](#검증-환경) · [로드맵](#로드맵)
+
 ---
 
 ## 이 저장소에 대하여
@@ -394,7 +426,7 @@ import해도 torch가 딸려오지 않습니다.
 
 **모델 계층을 격리했습니다.** `torch`와 `sentence-transformers` import는
 `rerank.py`의 메서드 안에만 있습니다. 덕분에 검색·융합·프롬프트 로직을
-GPU 없이 약 1초 만에 테스트할 수 있습니다. 이 프로젝트에서 실제로 시간을
+GPU 없이 수 초 만에 테스트할 수 있습니다. 이 프로젝트에서 실제로 시간을
 잡아먹은 문제는 대부분 모델이 아니라 데이터와 검색 로직 쪽이었고,
 그걸 확인하려고 매번 7.8B 모델을 올릴 이유는 없었습니다.
 
@@ -411,7 +443,7 @@ pytest
 ```
 
 ```
-231 passed in 1.1s
+231 passed
 ```
 
 무거운 의존성 없이 돌아갑니다. 커버리지는 원본에서 문제가 났던 지점에
@@ -455,6 +487,105 @@ pytest
   CI에서는 n-gram 경로만 검증됩니다.
 - **`CrossEncoderReranker`의 실제 추론은 테스트되지 않습니다.** 모델 로딩이
   일어나지 않는다는 것(지연 import, 빈 입력 조기 반환)까지만 검증합니다.
+
+## 확장하기
+
+파이프라인은 세 개의 `Protocol`만 알면 됩니다. 모델 없이도 끝까지 돌려 볼 수 있습니다.
+
+| 부품 | 인터페이스 | 비고 |
+|---|---|---|
+| 검색기 | `name: str`, `retrieve(query, k) -> List[RetrievedDoc]` | `name`은 검색기끼리 겹치면 안 됩니다 |
+| 재랭커 | `rerank(query, docs, top_k) -> List[FusedDoc]` | 생략하면 RRF 상위를 그대로 씁니다 |
+| 생성기 | `generate(prompt) -> str` | 생략하면 프롬프트만 만들고 답변은 빈 문자열입니다 |
+
+BM25 검색기와 가짜 생성기만으로 질문부터 trace까지 돌리는 예시입니다. 실제로 실행해서 확인한 코드입니다.
+
+```python
+import json
+from korean_medical_rag import RagConfig
+from korean_medical_rag.pipeline import RagPipeline
+from korean_medical_rag.retrieval import BM25Retriever
+
+rows = [json.loads(l) for l in open("examples/sample_corpus.jsonl", encoding="utf-8")]
+bm25 = BM25Retriever([r["text"] for r in rows], [{"file_id": r["file_id"]} for r in rows])
+
+class EchoGenerator:
+    def generate(self, prompt: str) -> str:
+        return f"(프롬프트 {len(prompt)}자)"
+
+pipe = RagPipeline(config=RagConfig(db_path="./unused"), retrievers=[bm25], generator=EchoGenerator())
+result = pipe.answer("당뇨병의 합병증은 무엇인가?", q_type=3)
+print(result.trace())
+```
+
+```
+질문: 당뇨병의 합병증은 무엇인가? (유형 3)
+융합: 후보 2건 (양쪽 0건, bm25 단독 2건)
+재랭킹: 2건 선정
+소요: retrieve 0.2ms fuse 0.0ms rerank 0.0ms generate 0.0ms
+```
+
+새 검색기(예: 다른 임베딩 모델, 키워드 사전)를 붙일 때는 `retrieve`가 **순위대로** 정렬된 목록을 돌려주기만 하면 됩니다. RRF는 점수를 보지 않으므로 점수 단위를 맞출 필요가 없습니다.
+
+답변이 틀렸을 때는 `RagResult`의 중간 결과로 원인 단계를 가립니다.
+
+| 정답 문서의 위치 | 의심할 단계 |
+|---|---|
+| `fused`에도 없음 | 검색기 (토크나이저, 임베딩, `*_k`) |
+| `fused`에는 있는데 `reranked`에서 빠짐 | 재랭커, `rerank_k`, `fusion_top_n` |
+| `reranked`에 있는데 답이 틀림 | 프롬프트, 생성 모델 |
+
+## 예외 레퍼런스
+
+모든 예외는 `RagError`를 상속하므로 `except RagError`로 한 번에 받을 수 있습니다.
+
+| 예외 | 언제 발생하나 |
+|---|---|
+| `ConfigError` | `RagConfig` 값이 잘못됨. 생성 시점에 바로 발생하므로 모델을 올리기 전에 드러납니다 |
+| `EmptyCorpusError` | 코퍼스가 비어 있음 |
+| `DuplicateDocumentIdError` | 인덱싱 시점에 같은 ID로 서로 다른 본문이 들어옴 |
+| `CorpusError` | 코퍼스 형식 오류 (위 두 예외의 부모) |
+| `RetrievalError` | 검색 단계 실패 |
+| `GenerationError` | 생성 단계 실패 |
+
+## 자주 묻는 질문
+
+**`--explain` 결과가 몇 건 안 나옵니다.**
+BM25는 질의 토큰이 문서에 하나라도 있어야 후보로 올립니다. 합성 코퍼스는 12건뿐이라 후보가 2건 정도로 적게 나오는 것이 정상입니다. 벡터 검색기를 붙이면 후보가 늘어납니다.
+
+**`kiwipiepy`를 설치하지 않아도 되나요?**
+됩니다. `--tokenizer-mode auto`는 설치돼 있으면 형태소 분석을, 없으면 문자 n-gram을 씁니다. 어느 쪽이 쓰였는지는 `--explain` 첫 줄의 "토크나이저"에 나옵니다. 형태소 모드를 명시했는데 `kiwipiepy`가 없으면 자동 폴백 없이 `ImportError`가 납니다.
+
+**원본과 같은 동작(공백 분리)으로 돌려 보고 싶습니다.**
+`--tokenizer-mode whitespace`로 지정하면 됩니다. 조사가 붙은 질의에서 결과가 0건이 되는 것을 직접 비교해 볼 수 있습니다.
+
+**`id_collisions` 경고가 뜹니다.**
+서로 다른 본문이 같은 ID로 합쳐졌다는 뜻입니다. 문서가 하나 사라진 상태이므로 색인 시점에 `chunk_index` 같은 값을 메타데이터에 넣어 다시 색인해야 합니다. 이 저장소는 감지까지만 합니다 ("알려진 한계" 참고).
+
+**원본 코퍼스에서 성능이 얼마나 오르나요?**
+측정하지 않았습니다. 이 저장소가 보이는 수치는 합성 벤치마크가 전부입니다.
+
+## 검증 환경
+
+이 README의 명령과 출력은 아래 환경에서 직접 실행해 확인했습니다.
+
+| | |
+|---|---|
+| OS / Python | Windows 11, Python 3.12.10 |
+| 설치 | `pip install -e ".[dev]"` (모델 extras 없이) |
+| 결과 | `pytest` 231건 통과, `krag --explain`과 `tokenizer_benchmark.py` 출력이 위 문서와 일치 |
+
+`models` extras를 설치한 상태에서의 임베딩·재랭킹·생성 실행은 확인하지 않았습니다. 위 "파이썬 API" 절의 출력 예시가 그 때문에 예시라고 명시되어 있습니다.
+
+## 로드맵
+
+"알려진 한계"에서 해결 가능한 항목을 작업 단위로 옮긴 목록입니다. 아직 시작하지 않았습니다.
+
+- [ ] 원본 코퍼스에서 세 가지 수정의 end-to-end 효과 측정 (데이터 접근과 GPU 필요)
+- [ ] `fusion_top_n`과 RRF 상수 `k` 튜닝
+- [ ] BM25 인덱스 영속화
+- [ ] `kiwipiepy` 경로를 CI에서 검증 (선택적 의존성을 포함한 별도 잡)
+- [ ] GitHub Actions로 테스트를 자동 실행하고 테스트 배지를 정적 이미지에서 실제 상태 배지로 교체
 
 ---
 
